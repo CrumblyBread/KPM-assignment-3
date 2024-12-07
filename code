@@ -1,1 +1,78 @@
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/mobility-module.h"
+#include "ns3/lte-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/ipv4-address-helper.h"
+#include "ns3/epc-module.h"
+#include "ns3/config-store.h"
+
+using namespace ns3;
+
+int main(int argc, char *argv[])
+{
+    // Time for teh simulation
+    Time simTime = Seconds(10); // Simulation time
+
+    // Number of eNodeBs and UEs
+    uint32_t numEnb = 2;
+    uint32_t numUe = 10;
+    double distance = 500.0; // Distance between eNodeBs and UEs in meters
+
+    // Set default values for the LTE simulation
+    Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(30.0));
+    Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(23.0));
+    Config::SetDefault("ns3::LteUePowerControl::ClosedLoop", BooleanValue(true));
+
+    // Create all nodes
+    NodeContainer enbNodes, ueNodes;
+    enbNodes.Create(numEnb);
+    ueNodes.Create(numUe);
+
+    // Install te LTE Devices on nodes
+    Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
+    lteHelper->SetAttribute("PathlossModel", StringValue("ns3::LogDistancePropagationLossModel"));
+    NetDeviceContainer enbDevs = lteHelper->InstallEnbDevice(enbNodes);
+    NetDeviceContainer ueDevs = lteHelper->InstallUeDevice(ueNodes);
+
+    // Install Mobility Model for eNodeBs (static)
+    MobilityHelper mobilityEnb;
+    Ptr<ListPositionAllocator> positionAllocEnb = CreateObject<ListPositionAllocator>();
+    for (uint32_t i = 0; i < numEnb; ++i)
+    {
+        positionAllocEnb->Add(Vector(i * distance, 0.0, 0.0)); // Distribute eNBs along the x-axis
+    }
+    mobilityEnb.SetPositionAllocator(positionAllocEnb);
+    mobilityEnb.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    mobilityEnb.Install(enbNodes);
+
+    // Install Mobility Model for UEs (random walking model)
+    MobilityHelper mobilityUe;
+    Ptr<ListPositionAllocator> positionAllocUe = CreateObject<ListPositionAllocator>();
+    for (uint32_t i = 0; i < numUe; ++i)
+    {
+        positionAllocUe->Add(Vector(0.0, i * distance, 0.0)); // Distribute UEs along the y-axis
+    }
+    mobilityUe.SetPositionAllocator(positionAllocUe);
+    mobilityUe.SetMobilityModel("ns3::RandomWalk2dMobilityModel");
+    mobilityUe.Install(ueNodes);
+
+    // Create internet stack and assign IP addresses
+    InternetStackHelper internet;
+    internet.Install(enbNodes);
+    internet.Install(ueNodes);
+
+    Ipv4AddressHelper ipv4;
+    Ipv4InterfaceContainer enbIpInterfaces = ipv4.Assign(enbDevs);
+    Ipv4InterfaceContainer ueIpInterfaces = ipv4.Assign(ueDevs);
+
+    // Installing applications 
+    NS_LOG_UNCOND("Simulation start.");
+    Simulator::Stop(simTime);
+    Simulator::Run();
+    NS_LOG_UNCOND("Simulation stop.");
+
+    Simulator::Destroy();
+    return 0;
+}
 
