@@ -11,7 +11,7 @@ using namespace ns3;
 
 int main(int argc, char *argv[])
 {
-    // Time for teh simulation
+    // Time for the simulation
     Time simTime = Seconds(10); // Simulation time
 
     // Number of eNodeBs and UEs
@@ -25,9 +25,10 @@ int main(int argc, char *argv[])
     Config::SetDefault("ns3::LteUePowerControl::ClosedLoop", BooleanValue(true));
 
     // Create all nodes
-    NodeContainer enbNodes, ueNodes;
+    NodeContainer enbNodes, ueNodes, remoteHost;
     enbNodes.Create(numEnb);
     ueNodes.Create(numUe);
+    remoteHost.Create(1); // Create one remote host
 
     // Install Mobility Model for eNodeBs (static)
     MobilityHelper mobilityEnb;
@@ -52,22 +53,34 @@ int main(int argc, char *argv[])
                                 "Bounds", RectangleValue(Rectangle(-5000, 5000, -5000, 5000)));
     mobilityUe.Install(ueNodes);
 
-    // Install te LTE Devices on nodes
+    // Install Mobility Model for the remote host
+    MobilityHelper mobilityRemoteHost;
+    mobilityRemoteHost.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    mobilityRemoteHost.Install(remoteHost);
+
+    // Install the LTE Devices on nodes
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
     lteHelper->SetAttribute("PathlossModel", StringValue("ns3::LogDistancePropagationLossModel"));
     NetDeviceContainer enbDevs = lteHelper->InstallEnbDevice(enbNodes);
     NetDeviceContainer ueDevs = lteHelper->InstallUeDevice(ueNodes);
 
-    // Create internet stack and assign IP addresses
+    // Create Internet stack and assign IP addresses
     InternetStackHelper internet;
     internet.Install(enbNodes);
     internet.Install(ueNodes);
+    internet.Install(remoteHost);
 
     Ipv4AddressHelper ipv4;
+    ipv4.SetBase("1.0.0.0", "255.255.255.0");
     Ipv4InterfaceContainer enbIpInterfaces = ipv4.Assign(enbDevs);
+
+    ipv4.SetBase("2.0.0.0", "255.255.255.0");
     Ipv4InterfaceContainer ueIpInterfaces = ipv4.Assign(ueDevs);
 
-    // Installing applications 
+    ipv4.SetBase("3.0.0.0", "255.255.255.0");
+    Ipv4InterfaceContainer remoteHostInterfaces = ipv4.Assign(remoteHost.Get(0)->GetObject<NetDeviceContainer>()->GetNetDevice(0));
+
+    // Installing applications
     NS_LOG_UNCOND("Simulation start.");
     Simulator::Stop(simTime);
     Simulator::Run();
