@@ -6,13 +6,18 @@
 #include "ns3/ipv4-address-helper.h"
 #include "ns3/epc-helper.h"
 #include "ns3/config-store.h"
+#include "ns3/buildings-module.h"
+#include "ns3/applications-module.h"
 
 using namespace ns3;
 
 int main(int argc, char *argv[])
 {
-    // Time for the simulation
+    // Time for teh simulation
     Time simTime = Seconds(10); // Simulation time
+
+    LogComponentEnable("UdpEchoClientApplication", LOG_LEVEL_INFO);
+    LogComponentEnable("UdpEchoServerApplication", LOG_LEVEL_INFO);
 
     // Number of eNodeBs and UEs
     uint32_t numEnb = 2;
@@ -53,18 +58,33 @@ int main(int argc, char *argv[])
                                 "Bounds", RectangleValue(Rectangle(-5000, 5000, -5000, 5000)));
     mobilityUe.Install(ueNodes);
 
-    // Install Mobility Model for the remote host
+     // Install Mobility Model for the remote host
     MobilityHelper mobilityRemoteHost;
     mobilityRemoteHost.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobilityRemoteHost.Install(remoteHost);
 
-    // Install the LTE Devices on nodes
+    // Install te LTE Devices on nodes
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
-    lteHelper->SetAttribute("PathlossModel", StringValue("ns3::LogDistancePropagationLossModel"));
+
+    // Configure the propagation loss model
+    Ptr<HybridBuildingsPropagationLossModel> lossModel = CreateObject<HybridBuildingsPropagationLossModel>();
+    lteHelper->SetPathlossModelType(TypeId::LookupByName("ns3::HybridBuildingsPropagationLossModel"));
+
+    // Add a building to the scenario
+    Ptr<Building> building = CreateObject<Building>();
+    building->SetBoundaries(Box(0.0, 50.0, 0.0, 50.0, 0.0, 20.0)); // Define building dimensions
+    building->SetBuildingType(Building::Residential);
+    building->SetExtWallsType(Building::ConcreteWithWindows);
+
+    // Install UEs and eNodeBs in the building context
+    BuildingsHelper::Install(ueNodes);
+    BuildingsHelper::Install(enbNodes);
+    
     NetDeviceContainer enbDevs = lteHelper->InstallEnbDevice(enbNodes);
     NetDeviceContainer ueDevs = lteHelper->InstallUeDevice(ueNodes);
+    NetDeviceContainer remoteHostDevices = lteHelper->InstallUeDevice(remoteHost);
 
-    // Create Internet stack and assign IP addresses
+    // Create internet stack and assign IP addresses
     InternetStackHelper internet;
     internet.Install(enbNodes);
     internet.Install(ueNodes);
@@ -78,9 +98,31 @@ int main(int argc, char *argv[])
     Ipv4InterfaceContainer ueIpInterfaces = ipv4.Assign(ueDevs);
 
     ipv4.SetBase("3.0.0.0", "255.255.255.0");
-    Ipv4InterfaceContainer remoteHostInterfaces = ipv4.Assign(remoteHost.Get(0)->GetObject<NetDeviceContainer>()->GetNetDevice(0));
+    Ipv4InterfaceContainer remoteHostInterfaces = ipv4.Assign(remoteHostDevices);
 
-    // Installing applications
+    uint16_t echoPort = 9;
+    //Install USP server on port 9
+    UdpEchoServerHelper echoServer(echoPort);
+
+    // Install the Server on an eNodeB
+    ApplicationContainer serverApps = echoServer.Install(remoteHost);
+    serverApps.Start(Seconds(1.0)); // Start the server at 1 second
+    serverApps.Stop(simTime);       // Stop the server at simulation end
+
+    UdpEchoClientHelper echoClient(remoteHostInterfaces.GetAddress(0), echoPort); // Server IP and port
+    echoClient.SetAttribute("MaxPackets", UintegerValue(5000));             // Large enough to last the simulation
+    echoClient.SetAttribute("Interval", TimeValue(MilliSeconds(200)));      // Packet interval: 200 ms
+    echoClient.SetAttribute("PacketSize", UintegerValue(1024));             // Packet size in bytes
+
+    ApplicationContainer clientApps;
+    for (uint32_t i = 0; i < numUe; ++i)
+    {
+        clientApps.Add(echoClient.Install(ueNodes.Get(i)));
+    }
+    clientApps.Start(Seconds(2.0)); // Start the clients at 2 seconds
+    clientApps.Stop(simTime);       // Stop the clients at simulation end
+
+    // Installing applications 
     NS_LOG_UNCOND("Simulation start.");
     Simulator::Stop(simTime);
     Simulator::Run();
