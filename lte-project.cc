@@ -8,6 +8,10 @@
 #include "ns3/config-store.h"
 #include "ns3/buildings-module.h"
 #include "ns3/applications-module.h"
+#include "ns3/flow-monitor-helper.h"
+#include "ns3/flow-monitor.h"
+#include "ns3/ipv4-flow-classifier.h"
+
 
 using namespace ns3;
 
@@ -19,10 +23,12 @@ int main(int argc, char *argv[])
     LogComponentEnable("UdpEchoClientApplication", LOG_LEVEL_INFO);
     LogComponentEnable("UdpEchoServerApplication", LOG_LEVEL_INFO);
 
+
     // Number of eNodeBs and UEs
     uint32_t numEnb = 2;
-    uint32_t numUe = 10;
-    double distance = 500.0; // Distance between eNodeBs and UEs in meters
+    uint32_t numUe = argc == 4 ? std::stoi(argv[1]): 10;
+    double distance = argc == 4 ? std::stoi(argv[2]): 500;
+
 
     // Set default values for the LTE simulation
     Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(30.0));
@@ -111,8 +117,11 @@ int main(int argc, char *argv[])
 
     UdpEchoClientHelper echoClient(remoteHostInterfaces.GetAddress(0), echoPort); // Server IP and port
     echoClient.SetAttribute("MaxPackets", UintegerValue(5000));             // Large enough to last the simulation
-    echoClient.SetAttribute("Interval", TimeValue(MilliSeconds(200)));      // Packet interval: 200 ms
+    echoClient.SetAttribute("Interval", TimeValue(MilliSeconds(argc == 4 ? std::stoi(argv[2]): 500)));      // Packet interval: 200 ms
     echoClient.SetAttribute("PacketSize", UintegerValue(1024));             // Packet size in bytes
+
+    FlowMonitorHelper flowHelper;
+    Ptr<FlowMonitor> monitor = flowHelper.InstallAll();
 
     ApplicationContainer clientApps;
     for (uint32_t i = 0; i < numUe; ++i)
@@ -122,11 +131,50 @@ int main(int argc, char *argv[])
     clientApps.Start(Seconds(2.0)); // Start the clients at 2 seconds
     clientApps.Stop(simTime);       // Stop the clients at simulation end
 
+    NS_LOG_UNCOND("UE: " << numUe);
+    NS_LOG_UNCOND("distance: " << distance);
+
     // Installing applications 
     NS_LOG_UNCOND("Simulation start.");
     Simulator::Stop(simTime);
     Simulator::Run();
     NS_LOG_UNCOND("Simulation stop.");
+
+    monitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowHelper.GetClassifier());
+    std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
+
+    double totalThroughput = 0.0;
+    double totalDelay = 0.0;
+    double packetsSent = 0.0;
+    double packetsReceived = 0.0;
+
+    if (stats.empty()) {
+        NS_LOG_UNCOND("No flows were detected during the simulation.");
+    } else {
+        for (auto const& flow : stats) {
+            Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flow.first);
+            NS_LOG_UNCOND("Flow ID: " << flow.first << " (" << t.sourceAddress << " -> " << t.destinationAddress << ")");
+            NS_LOG_UNCOND("  Tx Packets: " << flow.second.txPackets);
+            NS_LOG_UNCOND("  Rx Packets: " << flow.second.rxPackets);
+            NS_LOG_UNCOND("  Throughput: " << flow.second.rxBytes * 8.0 / simTime.GetSeconds() / 1e6 << " Mbps");
+            NS_LOG_UNCOND("  Delay: " << flow.second.delaySum.GetSeconds() / flow.second.rxPackets << " seconds");
+
+            totalThroughput += flow.second.rxBytes * 8.0 / simTime.GetSeconds() / 1e6;
+            totalDelay += flow.second.delaySum.GetSeconds();
+            packetsSent += flow.second.txPackets;
+            packetsReceived += flow.second.rxPackets;
+        }
+    }
+
+    double averageThroughput = totalThroughput;
+    double averageDelay = (packetsReceived > 0) ? totalDelay / packetsReceived : 0.0;
+    double pdr = (packetsSent > 0) ? (packetsReceived / packetsSent) * 100.0 : 0.0;
+
+    NS_LOG_UNCOND("=== Simulation Results ===");
+    NS_LOG_UNCOND("Total Throughput: " << averageThroughput << " Mbps");
+    NS_LOG_UNCOND("Average Latency: " << averageDelay * 1000 << " ms");
+    NS_LOG_UNCOND("Packet Delivery Ratio: " << pdr << " %");
 
     Simulator::Destroy();
     return 0;
