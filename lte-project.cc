@@ -11,6 +11,7 @@
 #include "ns3/flow-monitor-helper.h"
 #include "ns3/flow-monitor.h"
 #include "ns3/ipv4-flow-classifier.h"
+#include "ns3/point-to-point-module.h"
 
 
 using namespace ns3;
@@ -23,12 +24,15 @@ int main(int argc, char *argv[])
     LogComponentEnable("UdpEchoClientApplication", LOG_LEVEL_INFO);
     LogComponentEnable("UdpEchoServerApplication", LOG_LEVEL_INFO);
 
+    // Create LTE helper and EPC helper
+    Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
+    Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
+    lteHelper->SetEpcHelper(epcHelper);
 
     // Number of eNodeBs and UEs
     uint32_t numEnb = 2;
     uint32_t numUe = argc == 4 ? std::stoi(argv[1]): 10;
     double distance = argc == 4 ? std::stoi(argv[2]): 500;
-
 
     // Set default values for the LTE simulation
     Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(30.0));
@@ -36,17 +40,45 @@ int main(int argc, char *argv[])
     Config::SetDefault("ns3::LteUePowerControl::ClosedLoop", BooleanValue(true));
 
     // Create all nodes
-    NodeContainer enbNodes, ueNodes, remoteHost;
+    NodeContainer enbNodes, ueNodes, remoteHostContainer;
     enbNodes.Create(numEnb);
     ueNodes.Create(numUe);
-    remoteHost.Create(1); // Create one remote host
+    remoteHostContainer.Create(1); // Create one remote host
+    Ptr<Node> remoteHost = remoteHostContainer.Get(0);
+
+    // Create internet stack 
+    InternetStackHelper internet;
+    internet.Install(enbNodes);
+    internet.Install(ueNodes);
+    internet.Install(remoteHostContainer); 
+
+    // Internet connectivity (remote host)
+    Ptr<Node> pgw = epcHelper->GetPgwNode();
+    NodeContainer internetNodes;
+    internetNodes.Add(remoteHost);
+    internetNodes.Add(pgw);
+
+    PointToPointHelper p2p;
+    p2p.SetDeviceAttribute("DataRate", StringValue("1Gbps"));
+    p2p.SetChannelAttribute("Delay", StringValue("2ms"));
+
+    NetDeviceContainer internetDevices = p2p.Install(internetNodes);
+
+    Ipv4AddressHelper ipv4h;
+    ipv4h.SetBase("3.0.0.0", "255.255.255.0");
+    Ipv4InterfaceContainer internetIpIfaces = ipv4h.Assign(internetDevices);
+    Ipv4Address remoteHostAddr = internetIpIfaces.GetAddress(0);
+
+    Ipv4StaticRoutingHelper ipv4RoutingHelper;
+    Ptr<Ipv4StaticRouting> remoteHostStaticRouting = ipv4RoutingHelper.GetStaticRouting(remoteHost->GetObject<Ipv4>());
+    remoteHostStaticRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"), Ipv4Mask("255.255.255.0"), 1);
 
     // Install Mobility Model for eNodeBs (static)
     MobilityHelper mobilityEnb;
     Ptr<ListPositionAllocator> positionAllocEnb = CreateObject<ListPositionAllocator>();
     for (uint32_t i = 0; i < numEnb; ++i)
     {
-        positionAllocEnb->Add(Vector(i * distance, 0.0, 0.0)); // Distribute eNBs along the x-axis
+        positionAllocEnb->Add(Vector(i * distance, 0.0, 1.5)); // Distribute eNBs along the x-axis, height must be more than 0
     }
     mobilityEnb.SetPositionAllocator(positionAllocEnb);
     mobilityEnb.SetMobilityModel("ns3::ConstantPositionMobilityModel");
@@ -57,7 +89,7 @@ int main(int argc, char *argv[])
     Ptr<ListPositionAllocator> positionAllocUe = CreateObject<ListPositionAllocator>();
     for (uint32_t i = 0; i < numUe; ++i)
     {
-        positionAllocUe->Add(Vector(0.0, i * distance, 0.0)); // Distribute UEs along the y-axis
+        positionAllocUe->Add(Vector(0.0, i * distance, 1.0)); // Distribute UEs along the y-axis
     }
     mobilityUe.SetPositionAllocator(positionAllocUe);
     mobilityUe.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
@@ -68,9 +100,6 @@ int main(int argc, char *argv[])
     MobilityHelper mobilityRemoteHost;
     mobilityRemoteHost.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobilityRemoteHost.Install(remoteHost);
-
-    // Install te LTE Devices on nodes
-    Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
 
     // Configure the propagation loss model
     Ptr<HybridBuildingsPropagationLossModel> lossModel = CreateObject<HybridBuildingsPropagationLossModel>();
@@ -88,25 +117,19 @@ int main(int argc, char *argv[])
     
     NetDeviceContainer enbDevs = lteHelper->InstallEnbDevice(enbNodes);
     NetDeviceContainer ueDevs = lteHelper->InstallUeDevice(ueNodes);
-    NetDeviceContainer remoteHostDevices = lteHelper->InstallUeDevice(remoteHost);
 
-    // Create internet stack and assign IP addresses
-    InternetStackHelper internet;
-    internet.Install(enbNodes);
-    internet.Install(ueNodes);
-    internet.Install(remoteHost);
 
-    Ipv4AddressHelper ipv4;
-    ipv4.SetBase("1.0.0.0", "255.255.255.0");
-    Ipv4InterfaceContainer enbIpInterfaces = ipv4.Assign(enbDevs);
+    // Assign IP addresses to UEs
+    Ipv4InterfaceContainer ueIpIfaces = epcHelper->AssignUeIpv4Address(NetDeviceContainer(ueDevs));
 
-    ipv4.SetBase("2.0.0.0", "255.255.255.0");
-    Ipv4InterfaceContainer ueIpInterfaces = ipv4.Assign(ueDevs);
-
-    ipv4.SetBase("3.0.0.0", "255.255.255.0");
-    Ipv4InterfaceContainer remoteHostInterfaces = ipv4.Assign(remoteHostDevices);
+    // Attach UEs to eNodeBs
+    for (uint32_t i = 0; i < numUe; ++i)
+    {
+        lteHelper->Attach(ueDevs.Get(i), enbDevs.Get(0));
+    }
 
     uint16_t echoPort = 9;
+
     //Install USP server on port 9
     UdpEchoServerHelper echoServer(echoPort);
 
@@ -115,7 +138,7 @@ int main(int argc, char *argv[])
     serverApps.Start(Seconds(1.0)); // Start the server at 1 second
     serverApps.Stop(simTime);       // Stop the server at simulation end
 
-    UdpEchoClientHelper echoClient(remoteHostInterfaces.GetAddress(0), echoPort); // Server IP and port
+    UdpEchoClientHelper echoClient(remoteHostAddr, echoPort); // Server IP and port
     echoClient.SetAttribute("MaxPackets", UintegerValue(5000));             // Large enough to last the simulation
     echoClient.SetAttribute("Interval", TimeValue(MilliSeconds(argc == 4 ? std::stoi(argv[2]): 500)));      // Packet interval: 200 ms
     echoClient.SetAttribute("PacketSize", UintegerValue(1024));             // Packet size in bytes
