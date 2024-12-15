@@ -93,7 +93,7 @@ int main(int argc, char *argv[])
     }
     mobilityUe.SetPositionAllocator(positionAllocUe);
     mobilityUe.SetMobilityModel("ns3::RandomWalk2dMobilityModel",
-                                "Bounds", RectangleValue(Rectangle(-5000, 5000, -5000, 5000)));
+                                "Bounds", RectangleValue(Rectangle(-100000, 100000, -100000, 100000)));
     mobilityUe.Install(ueNodes);
 
      // Install Mobility Model for the remote host
